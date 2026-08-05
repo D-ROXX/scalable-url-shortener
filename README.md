@@ -60,8 +60,3 @@ API is now live at `http://localhost:3000`.
 
 ```bash
 npm test
-```
-
-## What's intentionally out of scope
-
-This covers the core that matters for interviews. Not included (by design, to keep this a project you can fully explain rather than a pile of generated boilerplate): Swagger docs, GeoIP lookup, Kafka, team workspaces, webhooks, CSV export. Each would be a reasonable "what would you add next" answer in an interview.

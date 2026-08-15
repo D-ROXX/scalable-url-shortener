@@ -1,9 +1,7 @@
 require('dotenv').config();
+
 const { Pool } = require('pg');
 
-// A single shared connection pool. pg handles connection reuse internally;
-// creating a new Pool per request is a common beginner mistake that exhausts
-// Postgres's max_connections under load.
 const pool = new Pool({
   host: process.env.DB_HOST,
   port: Number(process.env.DB_PORT) || 5432,
@@ -12,7 +10,7 @@ const pool = new Pool({
   password: process.env.DB_PASSWORD,
 
   ssl:
-    process.env.NODE_ENV === "production"
+    String(process.env.DB_SSL).toLowerCase() === 'true'
       ? { rejectUnauthorized: false }
       : false,
 
@@ -22,7 +20,10 @@ const pool = new Pool({
 });
 
 pool.on('error', (err) => {
-  console.error('Unexpected PostgreSQL pool error', err);
+  console.error(
+    'Unexpected PostgreSQL pool error:',
+    err.message
+  );
 });
 
 module.exports = pool;

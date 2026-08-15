@@ -1,43 +1,111 @@
 const analyticsRepository = require('../repositories/analyticsRepository');
 const logger = require('../utils/logger');
 
-// Very lightweight UA parsing without a heavy dependency — good enough to
-// bucket "mobile vs desktop" and the major browser families for analytics.
+// Lightweight User-Agent parser
 function parseUserAgent(ua = '') {
-  const deviceType = /mobile/i.test(ua) ? 'mobile' : 'desktop';
+  const deviceType = /mobile/i.test(ua)
+    ? 'mobile'
+    : 'desktop';
+
   let browser = 'other';
-  if (/chrome/i.test(ua)) browser = 'chrome';
-  else if (/firefox/i.test(ua)) browser = 'firefox';
-  else if (/safari/i.test(ua)) browser = 'safari';
-  else if (/edge/i.test(ua)) browser = 'edge';
-  return { deviceType, browser };
+
+  if (/edg/i.test(ua)) {
+    browser = 'edge';
+  } else if (/chrome/i.test(ua)) {
+    browser = 'chrome';
+  } else if (/firefox/i.test(ua)) {
+    browser = 'firefox';
+  } else if (/safari/i.test(ua)) {
+    browser = 'safari';
+  }
+
+  return {
+    deviceType,
+    browser,
+  };
 }
 
-// Fire-and-forget: the redirect endpoint calls this without awaiting so the
-// user's redirect isn't held up by an analytics write. Errors are logged,
-// never thrown, since a lost click event should never break a redirect.
+// Fire-and-forget analytics recording.
+// Redirect request ko analytics database write ke liye wait nahi karna padega.
 function recordClickAsync(req, urlId) {
-  const { deviceType, browser } = parseUserAgent(req.headers['user-agent']);
+  const {
+    deviceType,
+    browser,
+  } = parseUserAgent(
+    req.headers['user-agent']
+  );
+
   analyticsRepository
     .recordClick({
       urlId,
       ipAddress: req.ip,
-      referrer: req.headers.referer || null,
-      userAgent: req.headers['user-agent'] || null,
+      referrer:
+        req.headers.referer || null,
+      userAgent:
+        req.headers['user-agent'] || null,
       deviceType,
       browser,
     })
-    .catch((err) => logger.error('Failed to record click event', { message: err.message }));
+    .catch((err) => {
+      logger.error(
+        'Failed to record click event',
+        {
+          message: err.message,
+        }
+      );
+    });
 }
 
-async function getSummary(urlId) {
-  const [total, daily, referrers, devices] = await Promise.all([
-    analyticsRepository.totalClicks(urlId),
-    analyticsRepository.dailyClicks(urlId, 30),
-    analyticsRepository.topReferrers(urlId),
-    analyticsRepository.topDevices(urlId),
+// Get analytics summary.
+// Supported ranges: 7, 30, 90 days.
+async function getSummary(
+  urlId,
+  days = 30
+) {
+  const safeDays = [7, 30, 90].includes(
+    Number(days)
+  )
+    ? Number(days)
+    : 30;
+
+  const [
+    total,
+    daily,
+    referrers,
+    devices,
+  ] = await Promise.all([
+    analyticsRepository.totalClicks(
+      urlId
+    ),
+
+    analyticsRepository.dailyClicks(
+      urlId,
+      safeDays
+    ),
+
+    analyticsRepository.topReferrers(
+      urlId
+    ),
+
+    analyticsRepository.topDevices(
+      urlId
+    ),
   ]);
-  return { totalClicks: total, dailyClicks: daily, topReferrers: referrers, topDevices: devices };
+
+  return {
+    totalClicks: total,
+
+    days: safeDays,
+
+    dailyClicks: daily,
+
+    topReferrers: referrers,
+
+    topDevices: devices,
+  };
 }
 
-module.exports = { recordClickAsync, getSummary };
+module.exports = {
+  recordClickAsync,
+  getSummary,
+};

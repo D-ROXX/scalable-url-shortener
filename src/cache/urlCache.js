@@ -1,38 +1,153 @@
 const redis = require('../config/redis');
 const logger = require('../utils/logger');
 
-const TTL = Number(process.env.CACHE_TTL_SECONDS) || 3600;
-const keyFor = (code) => `url:${code}`;
+/* ============================================================
+   CACHE CONFIGURATION
+============================================================ */
 
-// Cache-aside pattern: caller checks get() first; on a miss it queries
-// Postgres itself and calls set() to populate the cache. This module never
-// touches Postgres directly, so the service layer stays in control of the
-// source of truth.
+const parsedTTL = Number(
+  process.env.CACHE_TTL_SECONDS
+);
+
+const TTL =
+  Number.isFinite(parsedTTL) &&
+  parsedTTL > 0
+    ? parsedTTL
+    : 3600;
+
+function keyFor(code) {
+  return `url:${String(code)}`;
+}
+
+/* ============================================================
+   GET
+============================================================ */
+
+/*
+ * Cache-aside read.
+ *
+ * Redis failure is treated as a cache miss.
+ * The service layer remains responsible for querying PostgreSQL.
+ */
+
 async function get(code) {
+  const key = keyFor(code);
+
   try {
-    const cached = await redis.get(keyFor(code));
-    return cached ? JSON.parse(cached) : null;
+    const cached =
+      await redis.get(key);
+
+    if (!cached) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(cached);
+    } catch (err) {
+      /*
+       * Corrupted cache entry.
+       * Remove it so future requests don't repeatedly
+       * encounter the same invalid JSON.
+       */
+      logger.warn(
+        'Invalid JSON found in Redis cache',
+        {
+          key,
+          message: err.message,
+        }
+      );
+
+      await redis.del(key);
+
+      return null;
+    }
   } catch (err) {
-    logger.error('Redis GET failed, falling back to DB', { message: err.message });
-    return null; // graceful degradation — treat as a cache miss
+    /*
+     * Redis is a cache, not the source of truth.
+     * PostgreSQL remains the fallback.
+     */
+    logger.error(
+      'Redis GET failed, falling back to DB',
+      {
+        message: err.message,
+        key,
+      }
+    );
+
+    return null;
   }
 }
+
+/* ============================================================
+   SET
+============================================================ */
+
+/*
+ * Populate cache after a PostgreSQL read.
+ *
+ * Redis failure must never make URL creation/redirect resolution
+ * fail because the database remains the source of truth.
+ */
 
 async function set(code, urlRow) {
+  const key = keyFor(code);
+
   try {
-    await redis.set(keyFor(code), JSON.stringify(urlRow), 'EX', TTL);
+    await redis.set(
+      key,
+      JSON.stringify(urlRow),
+      'EX',
+      TTL
+    );
   } catch (err) {
-    logger.error('Redis SET failed', { message: err.message });
+    logger.error(
+      'Redis SET failed',
+      {
+        message: err.message,
+        key,
+      }
+    );
   }
 }
 
-// Called on update/delete so stale data is never served after a write.
+/* ============================================================
+   INVALIDATE
+============================================================ */
+
+/*
+ * Called after URL deletion/update.
+ */
+
 async function invalidate(code) {
+  if (
+    code === undefined ||
+    code === null ||
+    code === ''
+  ) {
+    return;
+  }
+
+  const key = keyFor(code);
+
   try {
-    await redis.del(keyFor(code));
+    await redis.del(key);
   } catch (err) {
-    logger.error('Redis DEL failed', { message: err.message });
+    logger.error(
+      'Redis DEL failed',
+      {
+        message: err.message,
+        key,
+      }
+    );
   }
 }
 
-module.exports = { get, set, invalidate };
+/* ============================================================
+   EXPORTS
+============================================================ */
+
+module.exports = {
+  get,
+  set,
+  invalidate,
+};
